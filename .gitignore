@@ -1,0 +1,5 @@
+build/
+*.deb
+*.ddeb
+test-ar
+test-nemo

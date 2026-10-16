@@ -1,0 +1,106 @@
+--- a/libnemo-private/nemo-file-operations.c
++++ b/libnemo-private/nemo-file-operations.c
+@@ -561,7 +561,9 @@
+ 
+ 	g_assert (name[0] != '\0');
+ 
+-	*suffix = eel_filename_get_extension_offset (name + 1);
++	/* eel_filename_get_extension_offset() already skips the first char;
++	 * passing name + 1 lost the extension of one-letter names ("m.txt"). */
++	*suffix = eel_filename_get_extension_offset (name);
+ 
+ 	if (*suffix == NULL || (*suffix)[1] == '\0') {
+ 		/* no suffix */
+@@ -3478,6 +3480,16 @@
+ 	return FALSE;
+ }
+ 
++/* nemo-autorename: on a name conflict keep both (rename the incoming item,
++ * merge same-named folders) instead of asking.  Set NEMO_NO_AUTORENAME=1
++ * in the environment to get the original conflict dialog back. */
++static gboolean
++autorename_enabled (void)
++{
++	const char *v = g_getenv ("NEMO_NO_AUTORENAME");
++	return !(v != NULL && *v != '\0' && strcmp (v, "0") != 0);
++}
++
+ static GFile *
+ get_unique_target_file (GFile *src,
+ 			GFile *dest_dir,
+@@ -4421,6 +4433,7 @@
+ 	gboolean handled_invalid_filename;
+     gboolean target_is_desktop, source_is_desktop;
+ 
++	gboolean ar_merge = FALSE; /* autorename chose "merge"; never delete in that case */
+ 	job = (CommonJob *)copy_job;
+ 
+ 	if (should_skip_file (job, src)) {
+@@ -4660,6 +4673,17 @@
+ 			is_a_merge = TRUE;
+ 		}
+ 
++		if (autorename_enabled ()) {
++			if (is_a_merge) {
++				overwrite = TRUE;
++				ar_merge = TRUE;
++			} else {
++				g_object_unref (dest);
++				dest = get_unique_target_file (src, dest_dir, same_fs, *dest_fs_type, unique_name_nr++);
++			}
++			goto retry;
++		}
++
+ 		if ((is_a_merge && job->merge_all) ||
+ 		    (!is_a_merge && job->replace_all)) {
+ 			overwrite = TRUE;
+@@ -4715,6 +4739,16 @@
+ 
+ 		g_error_free (error);
+ 
++		if (ar_merge) {
++			/* autorename only asked for a folder merge; never remove the
++			 * existing target, keep both instead. */
++			ar_merge = FALSE;
++			overwrite = FALSE;
++			g_object_unref (dest);
++			dest = get_unique_target_file (src, dest_dir, same_fs, *dest_fs_type, unique_name_nr++);
++			goto retry;
++		}
++
+ 		if (remove_target_recursively (job, src, dest, dest)) {
+ 			goto retry;
+ 		}
+@@ -4727,6 +4761,15 @@
+ 		would_recurse = error->code == G_IO_ERROR_WOULD_RECURSE;
+ 		g_error_free (error);
+ 
++		if (ar_merge && would_recurse) {
++			/* autorename only asked for a folder merge; never remove the
++			 * existing target, keep both instead. */
++			ar_merge = FALSE;
++			overwrite = FALSE;
++			g_object_unref (dest);
++			dest = get_unique_target_file (src, dest_dir, same_fs, *dest_fs_type, unique_name_nr++);
++			goto retry;
++		}
+ 		if (overwrite && would_recurse) {
+ 			error = NULL;
+ 
+@@ -5316,6 +5359,16 @@
+ 			is_merge = TRUE;
+ 		}
+ 
++		if (autorename_enabled ()) {
++			if (is_merge) {
++				overwrite = TRUE;
++			} else {
++				g_object_unref (dest);
++				dest = get_unique_target_file (src, dest_dir, same_fs, *dest_fs_type, unique_name_nr++);
++			}
++			goto retry;
++		}
++
+ 		if ((is_merge && job->merge_all) ||
+ 		    (!is_merge && job->replace_all)) {
+ 			overwrite = TRUE;
